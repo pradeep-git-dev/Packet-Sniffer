@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Sniffer (React Dashboard)</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    
+    <!-- React & Recharts via CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+
+    <style>
+        :root {
+            --bg-base: #0f172a;
+            --bg-panel: #1e293b;
+            --border: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #38bdf8;
+            --danger: #ef4444;
+            --danger-bg: rgba(239, 68, 68, 0.1);
+            --success: #10b981;
+        }
+
+        body {
+            margin: 0; padding: 0;
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            -ms-overflow-style: none; scrollbar-width: none;
+        }
+        ::-webkit-scrollbar { display: none; }
+
+        .app-container {
+            padding: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;
+        }
+        .header h1 { margin: 0; font-size: 1.8rem; color: var(--text-main); }
+        .header h1 span { color: var(--primary); }
+        
+        .status {
+            display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.9rem;
+            background: rgba(16, 185, 129, 0.1); color: var(--success);
+            padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+        .status.disconnected {
+            color: var(--danger); background: var(--danger-bg); border-color: rgba(239,68,68,0.2);
+        }
+
+        .grid-stats {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: var(--bg-panel); border: 1px solid var(--border); padding: 1.5rem; border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .stat-label { font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
+        .stat-value { font-size: 2.2rem; font-weight: 800; margin-top: 0.5rem; }
+
+        .main-grid {
+            display: grid; grid-template-columns: 350px 1fr; gap: 1.5rem;
+        }
+
+        .panel {
+            background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; 
+            display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .panel-header {
+            padding: 1rem; border-bottom: 1px solid var(--border); font-weight: 600; background: rgba(0,0,0,0.2);
+            color: var(--text-main);
+        }
+        .panel-body { padding: 1rem; overflow-y: auto; }
+        
+        .alert-box {
+            background: var(--danger-bg); border-left: 3px solid var(--danger);
+            padding: 10px; margin-bottom: 10px; border-radius: 4px; font-size: 0.85rem; color: #fca5a5;
+            line-height: 1.4;
+        }
+
+        .ip-box {
+            display: flex; justify-content: space-between; padding: 12px 10px; 
+            border-bottom: 1px solid rgba(0,0,0,0.2); font-size: 0.85rem; background: rgba(255,255,255,0.02);
+            align-items: center;
+        }
+        .ip-box:last-child { border-bottom: none; }
+
+        /* React Table */
+        .table-wrap { height: 600px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+        th { position: sticky; top: 0; background: #0f172a; padding: 14px 10px; text-align: left; color: var(--text-muted); border-bottom: 1px solid var(--border); font-weight: 600; text-transform: uppercase; }
+        td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        .row:hover { background: rgba(255,255,255,0.03); }
+        .row-alert { background: rgba(239, 68, 68, 0.05); }
+
+        .tag-info { font-size: 0.7rem; background: rgba(56,189,248,0.15); color: var(--primary); padding: 3px 8px; border-radius: 4px; margin-top: 6px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- React App Logic -->
+    {% raw %}
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } = window.Recharts;
+
+        const App = () => {
+            const [packets, setPackets] = useState([]);
+            const [connected, setConnected] = useState(false);
+            const [alerts, setAlerts] = useState([]);
+            const [stats, setStats] = useState({
+                total: 0, tcp: 0, udp: 0, dns: 0, protocolData: [], topIps: []
+            });
+
+            useEffect(() => {
+                const source = new EventSource('/stream');
+                
+                source.onopen = () => setConnected(true);
+                source.onerror = () => setConnected(false);
+                
+                source.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    const p = data.packet;
+
+                    setStats({
+                        total: data.total_packets,
+                        tcp: data.stats.TCP,
+                        udp: data.stats.UDP,
+                        dns: data.stats.DNS,
+                        protocolData: [
+                            { name: 'TCP', value: data.stats.TCP },
+                            { name: 'UDP', value: data.stats.UDP },
+                            { name: 'ICMP', value: data.stats.ICMP },
+                            { name: 'ARP', value: data.stats.ARP },
+                            { name: 'OTHER', value: data.stats.OTHER }
+                        ].filter(d => d.value > 0),
+                        topIps: data.stats.top_ips || []
+                    });
+
+                    // Track latest alerts
+                    if (p.alert) {
+                        setAlerts(prev => [{id: Date.now() + Math.random(), time: p.time, text: p.alert}, ...prev].slice(0, 15));
+                    }
+
+                    // Prepend new packets safely
+                    setPackets(prev => {
+                        const newArr = [p, ...prev];
+                        if (newArr.length > 100) newArr.pop();
+                        return newArr;
+                    });
+                };
+
+                return () => source.close();
+            }, []);
+
+            const COLORS = ['#38bdf8', '#8b5cf6', '#ef4444', '#f59e0b', '#94a3b8'];
+
+            return (
+                <div className="app-container">
+                    <div className="header">
+                        <h1>System Sniffer <span>UI</span></h1>
+                        <div className={`status ${!connected ? 'disconnected' : ''}`}>
+                            {connected ? '● Stream Live' : '● Disconnected'}
+                        </div>
+                    </div>
+
+                    <div className="grid-stats">
+                        <div className="stat-card">
+                            <div className="stat-label">Total Volume</div>
+                            <div className="stat-value" style={{color: '#38bdf8'}}>{stats.total.toLocaleString()}</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-label">TCP Packets</div>
+                            <div className="stat-value">{stats.tcp.toLocaleString()}</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-label">UDP Packets</div>
+                            <div className="stat-value">{stats.udp.toLocaleString()}</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-label">DNS Queries</div>
+                            <div className="stat-value">{stats.dns.toLocaleString()}</div>
+                        </div>
+                    </div>
+
+                    <div className="main-grid">
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '1.5rem'}}>
+                            
+                            {/* ALERTS SECTION */}
+                            <div className="panel" style={{borderColor: 'rgba(239, 68, 68, 0.4)'}}>
+                                <div className="panel-header" style={{color: '#ef4444'}}>Suspicious Alerts (IDS)</div>
+                                <div className="panel-body" style={{ maxHeight: '250px' }}>
+                                    {alerts.length === 0 ? (
+                                        <div style={{color: '#64748b', fontSize: '0.85rem'}}>No suspicious activity yet.</div>
+                                    ) : alerts.map(a => (
+                                        <div key={a.id} className="alert-box">
+                                            <strong>{a.time}</strong> - {a.text}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* REACT RECHARTS SECTION */}
+                            <div className="panel">
+                                <div className="panel-header">Protocol Distribution</div>
+                                <div className="panel-body" style={{height: '250px'}}>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <PieChart>
+                                            <Pie data={stats.protocolData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                                                {stats.protocolData.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip contentStyle={{backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff'}} />
+                                            <Legend wrapperStyle={{fontSize: '12px', color: '#f8fafc'}} />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+
+                            {/* TOP IPS SECTION */}
+                            <div className="panel">
+                                <div className="panel-header">Top Active IPs</div>
+                                <div className="panel-body" style={{padding: 0}}>
+                                    {stats.topIps.map((ip, i) => (
+                                        <div key={i} className="ip-box">
+                                            <span>{ip.ip}</span>
+                                            <span style={{color: '#38bdf8', fontWeight: 'bold'}}>{ip.count}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                        </div>
+
+                        {/* REACT STREAM TABLE */}
+                        <div className="panel">
+                            <div className="panel-header" style={{display: 'flex', justifyContent: 'space-between'}}>
+                                <span>Real-Time Stream</span>
+                                <span style={{color: '#64748b', fontWeight: 'normal'}}>Last 100 packets</span>
+                            </div>
+                            <div className="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th style={{width: '90px'}}>Time</th>
+                                            <th style={{width: '200px'}}>Source IP Context</th>
+                                            <th style={{width: '200px'}}>Dest IP Context</th>
+                                            <th style={{width: '80px'}}>Proto</th>
+                                            <th>Payload / Info</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {packets.map((p, i) => (
+                                            <tr key={p.id + i} className={`row ${p.alert ? 'row-alert' : ''}`}>
+                                                <td style={{color: '#94a3b8'}}>{p.time}</td>
+                                                <td>
+                                                    <div style={{fontWeight: '500'}}>{p.src}</div>
+                                                    {p.src_info && <div className="tag-info">{p.src_info}</div>}
+                                                </td>
+                                                <td>
+                                                    <div style={{fontWeight: '500'}}>{p.dst}</div>
+                                                    {p.dst_info && <div className="tag-info">{p.dst_info}</div>}
+                                                </td>
+                                                <td style={{color: '#38bdf8', fontWeight: 'bold'}}>{p.protocol}</td>
+                                                <td>
+                                                    <div style={{fontWeight: '600', marginBottom: '4px'}}>{p.port !== '-' ? `Port Routing: ${p.port}` : ''}</div>
+                                                    <div style={{color: '#cbd5e1', fontSize: '0.8rem', maxWidth: '350px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                                                        {p.info}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+    {% endraw %}
+</body>
+</html>
