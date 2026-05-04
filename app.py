@@ -164,6 +164,7 @@ def get_stats_summary():
         "DNS": stats["DNS"],
         "ICMP": stats["ICMP"],
         "ARP": stats["ARP"],
+        "OTHER": stats.get("OTHER", 0),
         "top_ips": [{"ip": ip, "count": c} for ip, c in top_ips]
     }
 
@@ -195,6 +196,18 @@ def download_logs():
     with open("packets.json", "w") as f:
         json.dump(list(packets_history), f, indent=4)
     return send_file("packets.json", as_attachment=True)
+
+@app.route("/api/alerts")
+def get_alerts():
+    return jsonify(list(recent_alerts))
+
+@app.route("/api/stats")
+def get_api_stats():
+    return jsonify({
+        "total_packets": sum(stats.values()),
+        "stats": get_stats_summary(),
+        "alerts_count": len(recent_alerts)
+    })
 
 def inject_dummy_activity():
     time.sleep(3)
